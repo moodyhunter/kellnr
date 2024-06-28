@@ -10,9 +10,9 @@ use common::cratesio_prefetch_msg::CratesioPrefetchMsg;
 use db::{ConString, Database, DbProvider, PgConString, SqliteConString};
 use index::{
     cratesio_prefetch_api::{self, init_cratesio_prefetch_thread},
-    kellnr_prefetch_api,
+    kellnr_prefetch_api, unified_prefetch_api,
 };
-use registry::{cratesio_api, kellnr_api};
+use registry::{cratesio_api, kellnr_api, unified_api};
 use settings::{LogFormat, Settings};
 use std::{
     convert::TryFrom,
@@ -73,6 +73,7 @@ async fn main() {
     let signing_key = Key::generate();
     let max_docs_size = settings.docs.max_size;
     let max_crate_size = settings.registry.max_crate_size as usize;
+    let cratesio_enabled = settings.proxy.enabled;
     let state = AppStateData {
         db,
         signing_key,
@@ -176,6 +177,35 @@ async fn main() {
             session::session_auth_when_required,
         ));
 
+    let unified_api = if cratesio_enabled {
+        Router::new()
+            .route("/", get(unified_api::search))
+            .route("/:package/:version/download", get(unified_api::download))
+            .route("/config.json", get(unified_prefetch_api::config_unified))
+            .route("/:a/:b/:name", get(unified_prefetch_api::prefetch_unified))
+            .route(
+                "/:a/:name",
+                get(unified_prefetch_api::prefetch_len2_unified),
+            )
+            // kellnr APIs
+            .route("/:crate_name/owners", delete(kellnr_api::remove_owner))
+            .route("/:crate_name/owners", put(kellnr_api::add_owner))
+            .route("/:crate_name/owners", get(kellnr_api::list_owners))
+            .route(
+                "/new",
+                put(kellnr_api::publish).layer(DefaultBodyLimit::max(max_crate_size * 1_000_000)),
+            )
+            .route("/:crate_name/:version/yank", delete(kellnr_api::yank))
+            .route("/:crate_name/:version/unyank", put(kellnr_api::unyank))
+            //
+            .route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth::auth_req_token::cargo_auth_when_required,
+            ))
+    } else {
+        Router::new()
+    };
+
     let app = Router::new()
         .route("/me", get(kellnr_api::me))
         .nest("/api/v1/ui", ui)
@@ -183,6 +213,7 @@ async fn main() {
         .nest("/api/v1/docs", docs)
         .nest("/api/v1/crates", kellnr_api)
         .nest("/api/v1/cratesio", cratesio_api)
+        .nest("/api/v1/unified", unified_api)
         .nest_service("/docs", docs_service)
         .fallback(static_files_service)
         .with_state(state)

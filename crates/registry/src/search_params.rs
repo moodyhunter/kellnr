@@ -3,11 +3,13 @@ use common::original_name::OriginalName;
 use hyper::StatusCode;
 use std::{collections::HashMap, convert::TryFrom, usize};
 
+#[derive(Clone)]
 pub struct SearchParams {
     pub q: OriginalName,
     pub per_page: PerPage,
 }
 
+#[derive(Clone)]
 pub struct PerPage(pub usize);
 
 impl TryFrom<usize> for PerPage {
